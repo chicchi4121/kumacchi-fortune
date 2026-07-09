@@ -1,0 +1,625 @@
+import streamlit as st
+from openai import OpenAI
+import os
+import json
+import hashlib
+import re
+from datetime import date, datetime
+from pathlib import Path
+
+# ──────────────────────────────────────────────
+# ページ設定
+# ──────────────────────────────────────────────
+st.set_page_config(
+    page_title="くまっち占い",
+    page_icon="🔮",
+    layout="centered"
+)
+
+st.markdown("""
+<style>
+    .stApp {
+        background: linear-gradient(135deg, #0d0d2b 0%, #1a0533 50%, #0d0d2b 100%);
+    }
+    .main-title {
+        text-align: center;
+        font-size: 2.8rem;
+        color: #e8c97e;
+        text-shadow: 0 0 20px #e8c97e88;
+        margin-bottom: 0.2rem;
+    }
+    .subtitle {
+        text-align: center;
+        color: #b08fd4;
+        font-size: 1rem;
+        margin-bottom: 2rem;
+        letter-spacing: 0.2em;
+    }
+    .fortune-card {
+        background: linear-gradient(145deg, #1c0a3a, #2d1060);
+        border: 1px solid #6a3d9a55;
+        border-radius: 16px;
+        padding: 1.8rem 2rem;
+        color: #e8dff5;
+        font-size: 1.05rem;
+        line-height: 2.0;
+        box-shadow: 0 0 30px #6a3d9a44;
+        margin-top: 1rem;
+        white-space: pre-wrap;
+    }
+    .stSelectbox label, .stTextInput label {
+        color: #c9a9e8 !important;
+        font-size: 0.95rem !important;
+    }
+    .stButton button {
+        background: linear-gradient(135deg, #6a3d9a, #9b59b6);
+        color: white;
+        border: none;
+        border-radius: 50px;
+        padding: 0.6rem 2.5rem;
+        font-size: 1.1rem;
+        font-weight: bold;
+        width: 100%;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 15px #6a3d9a66;
+    }
+    .stButton button:hover {
+        box-shadow: 0 6px 25px #9b59b688;
+        transform: translateY(-2px);
+    }
+    .cache-badge {
+        display: inline-block;
+        background: #2d1060;
+        color: #b08fd4;
+        border: 1px solid #6a3d9a55;
+        border-radius: 20px;
+        padding: 0.2rem 0.8rem;
+        font-size: 0.8rem;
+        margin-top: 0.5rem;
+    }
+    .fortune-id-box {
+        background: #110826;
+        border: 1px solid #6a3d9a33;
+        border-radius: 10px;
+        padding: 0.7rem 1.2rem;
+        color: #b08fd4;
+        font-size: 0.9rem;
+        margin-top: 0.8rem;
+    }
+    .fortune-id-value {
+        font-family: monospace;
+        color: #e8c97e;
+        font-size: 1.1rem;
+        letter-spacing: 0.15em;
+    }
+    .section-divider {
+        border: none;
+        border-top: 1px solid #6a3d9a44;
+        margin: 1.2rem 0;
+    }
+    .stRadio label {
+        color: #c9a9e8 !important;
+    }
+    .stRadio > div {
+        flex-direction: row !important;
+        gap: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────
+# 定数
+# ──────────────────────────────────────────────
+CACHE_FILE = Path(__file__).parent / "fortune_cache.json"
+OPENAI_MODEL = "gpt-5-mini"
+OPENAI_FALLBACK_MODEL = "gpt-4o-mini"
+
+LUCKY_COLORS = ["赤", "青", "黄", "緑", "紫", "ピンク", "白", "黒", "ゴールド", "シルバー"]
+LUCKY_ITEMS = [
+    "腕時計", "ハンカチ", "手帳", "財布", "ペン", "鏡",
+    "香水", "イヤリング", "マフラー", "帽子", "本", "花",
+    "キャンドル", "クリスタル", "お守り", "傘", "指輪", "ブレスレット",
+]
+
+TODAY_SYSTEM_PROMPT = """\
+あなたは占い師「くまっち」です。
+運勢の数値はすでに決定されています。あなたの役割は「各運勢の解説」「開運アドバイス」「開運カラオケ曲の選定」のみです。
+
+ユーザーから渡される運勢データをそのまま使い、必ず以下のフォーマットだけで返してください。余分な前置きは不要です。
+
+🌟総合運
+{overall_stars}
+[総合運の解説を40〜60文字で。占い師らしい前向きな文章]
+
+💕恋愛運
+{love_stars}
+[恋愛運の解説を40〜60文字で]
+
+💰金運
+{money_stars}
+[金運の解説を40〜60文字で]
+
+💼仕事運
+{work_stars}
+[仕事運の解説を40〜60文字で]
+
+🍀健康運
+{health_stars}
+[健康運の解説を40〜60文字で]
+
+🎨ラッキーカラー
+{color}
+
+🔢ラッキーナンバー
+{number}
+
+🎁ラッキーアイテム
+{item}
+
+🎤開運カラオケ曲
+[曲名] / [アーティスト名]
+[その曲を選んだ理由を20〜40文字で。生年月日から世代を推定し知っていそうな日本の曲を選ぶ]
+
+✨開運アドバイス
+[60〜100文字の具体的なアドバイス]
+
+運勢は行動次第で変わります✨
+
+【絶対ルール】
+- 星の数は絶対に変更禁止。渡された値をそのまま正確に表示すること
+- ラッキーカラー・ナンバー・アイテムも絶対に変更禁止
+- 各解説は具体的で前向きな内容にする
+- 占いは娯楽として提供する
+- フォーマット以外の文章を追加しない\
+"""
+
+COMPAT_SYSTEM_PROMPT = """\
+あなたは占い師「くまっち」です。2人の相性を占い、必ず以下のフォーマットだけで返してください。余分な説明や前置きは不要です。
+
+💑相性スコア
+{compat_stars}（{compat_score}点）
+
+🌟総合相性
+[60〜80文字で2人の総合的な相性]
+
+💕恋愛面
+[60〜80文字で恋愛における相性]
+
+💼協力・仕事面
+[60〜80文字で協力関係における相性]
+
+🎁共通ラッキーアイテム
+{item}
+
+✨開運アドバイス
+[2人へのアドバイスを60〜100文字で]
+
+運勢は行動次第で変わります✨
+
+【絶対ルール】
+- 星とスコアは絶対に変更禁止。渡された値をそのまま使うこと
+- ラッキーアイテムも絶対に変更禁止
+- 占いは娯楽として提供する
+- フォーマット以外の文章を追加しない\
+"""
+
+# ──────────────────────────────────────────────
+# ユーティリティ
+# ──────────────────────────────────────────────
+def stars(n: int) -> str:
+    return "★" * n + "☆" * (5 - n)
+
+def load_cache() -> dict:
+    if CACHE_FILE.exists():
+        try:
+            with open(CACHE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_cache(cache: dict) -> None:
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+def parse_birth(raw: str) -> tuple[str, str]:
+    """8桁数字（YYYYMMDD）を検証し (表示用文字列, エラーメッセージ) を返す。"""
+    raw = raw.strip()
+    if not raw:
+        return "", ""
+    if not raw.isdigit() or len(raw) != 8:
+        return "", "生年月日は8桁の数字で入力してください（例：19810130）"
+    yyyy, mm, dd = raw[:4], raw[4:6], raw[6:]
+    try:
+        datetime(int(yyyy), int(mm), int(dd))
+    except ValueError:
+        return "", f"日付が正しくありません（入力値：{raw}）"
+    return f"{yyyy}年{int(mm)}月{int(dd)}日", ""
+
+# ──────────────────────────────────────────────
+# シード生成（優先順位付き）
+# ──────────────────────────────────────────────
+def make_seed_source(
+    today_iso: str,
+    user_id: str = "",
+    name: str = "",
+    birth: str = "",
+) -> str | None:
+    """
+    シードソースをユーザー入力の優先順位に従って生成する。
+    ① user_id あり          → today + user_id
+    ② name + birth 両方あり → today + name + birth
+    ③ name のみ             → today + name
+    ④ birth のみ            → today + birth
+    ⑤ 全て未入力            → None（エラー）
+    """
+    if user_id.strip():
+        return f"{today_iso}|uid:{user_id.strip()}"
+    if name.strip() and birth.strip():
+        return f"{today_iso}|{name.strip()}|{birth.strip()}"
+    if name.strip():
+        return f"{today_iso}|{name.strip()}"
+    if birth.strip():
+        return f"{today_iso}|{birth.strip()}"
+    return None
+
+# ──────────────────────────────────────────────
+# 運勢値の決定論的生成
+# ──────────────────────────────────────────────
+def determine_fortune_values(seed_source: str) -> dict:
+    """SHA256ハッシュから運勢の数値を決定論的に生成する。"""
+    digest = hashlib.sha256(seed_source.encode("utf-8")).digest()
+
+    def pick(byte_index: int, choices: int) -> int:
+        return digest[byte_index % 32] % choices
+
+    return {
+        "overall": pick(0, 5) + 1,
+        "love":    pick(1, 5) + 1,
+        "money":   pick(2, 5) + 1,
+        "work":    pick(3, 5) + 1,
+        "health":  pick(4, 5) + 1,
+        "color":   LUCKY_COLORS[pick(5, len(LUCKY_COLORS))],
+        "number":  pick(6, 99) + 1,
+        "item":    LUCKY_ITEMS[pick(7, len(LUCKY_ITEMS))],
+    }
+
+def get_fortune_id(seed_source: str) -> str:
+    """運勢ID（SHA256の先頭8文字）を返す。同じシードなら同じID。"""
+    return hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:8]
+
+# ──────────────────────────────────────────────
+# GPT出力の検証（改善7）
+# ──────────────────────────────────────────────
+def verify_fortune_output(text: str, v: dict) -> bool:
+    """GPT出力が指定の運勢値と一致するか検証する。"""
+    star_checks = [
+        (r"🌟総合運\s*\n(★+☆*)", "overall"),
+        (r"💕恋愛運\s*\n(★+☆*)", "love"),
+        (r"💰金運\s*\n(★+☆*)", "money"),
+        (r"💼仕事運\s*\n(★+☆*)", "work"),
+        (r"🍀健康運\s*\n(★+☆*)", "health"),
+    ]
+    for pattern, key in star_checks:
+        m = re.search(pattern, text)
+        if not m or m.group(1).count("★") != v[key]:
+            return False
+
+    color_m = re.search(r"🎨ラッキーカラー\s*\n(.+)", text)
+    if not color_m or color_m.group(1).strip() != v["color"]:
+        return False
+
+    num_m = re.search(r"🔢ラッキーナンバー\s*\n(\d+)", text)
+    if not num_m or int(num_m.group(1).strip()) != v["number"]:
+        return False
+
+    item_m = re.search(r"🎁ラッキーアイテム\s*\n(.+)", text)
+    if not item_m or item_m.group(1).strip() != v["item"]:
+        return False
+
+    return True
+
+def force_correct_values(text: str, v: dict) -> str:
+    """検証失敗時に指定値を強制的に上書きする。"""
+    text = re.sub(r"(🌟総合運\s*\n)★+☆*", rf"\g<1>{stars(v['overall'])}", text)
+    text = re.sub(r"(💕恋愛運\s*\n)★+☆*",  rf"\g<1>{stars(v['love'])}", text)
+    text = re.sub(r"(💰金運\s*\n)★+☆*",    rf"\g<1>{stars(v['money'])}", text)
+    text = re.sub(r"(💼仕事運\s*\n)★+☆*",  rf"\g<1>{stars(v['work'])}", text)
+    text = re.sub(r"(🍀健康運\s*\n)★+☆*",  rf"\g<1>{stars(v['health'])}", text)
+    text = re.sub(r"(🎨ラッキーカラー\s*\n).+",   rf"\g<1>{v['color']}", text)
+    text = re.sub(r"(🔢ラッキーナンバー\s*\n)\d+", rf"\g<1>{v['number']}", text)
+    text = re.sub(r"(🎁ラッキーアイテム\s*\n).+",  rf"\g<1>{v['item']}", text)
+    return text
+
+# ──────────────────────────────────────────────
+# OpenAI呼び出し（モデルフォールバック付き）
+# ──────────────────────────────────────────────
+def call_openai(system_prompt: str, user_content: str) -> str:
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    for model in [OPENAI_MODEL, OPENAI_FALLBACK_MODEL]:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=700,
+                temperature=0.3,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            err = str(e).lower()
+            if "model" in err or "not found" in err or "does not exist" in err:
+                continue
+            raise
+    raise RuntimeError(
+        f"利用可能なモデルがありません（{OPENAI_MODEL} / {OPENAI_FALLBACK_MODEL}）"
+    )
+
+# ──────────────────────────────────────────────
+# 今日の運勢生成（外部呼び出し可能・改善10）
+# ──────────────────────────────────────────────
+def generate_today_fortune(
+    user_id: str = "",
+    name: str = "",
+    birth: str = "",
+    today_iso: str | None = None,
+    today_label: str | None = None,
+) -> dict:
+    """
+    今日の運勢を生成する。外部から呼び出し可能。
+    将来的に generate_today_fortune(user_id="rezona_uid") のように使用。
+
+    Returns dict:
+        result      : str        表示テキスト
+        from_cache  : bool       キャッシュ利用か
+        fortune_id  : str | None 運勢ID（8文字）
+        error       : str | None エラーメッセージ
+    """
+    if today_iso is None:
+        today_iso = date.today().strftime("%Y-%m-%d")
+    if today_label is None:
+        today_label = date.today().strftime("%Y年%m月%d日")
+
+    seed_source = make_seed_source(today_iso, user_id=user_id, name=name, birth=birth)
+    if seed_source is None:
+        return {"result": None, "from_cache": False, "fortune_id": None,
+                "error": "名前または生年月日を入力してください"}
+
+    fortune_id = get_fortune_id(seed_source)
+    cache = load_cache()
+    cache_key = f"today|{seed_source}"
+
+    if cache_key in cache:
+        return {"result": cache[cache_key], "from_cache": True,
+                "fortune_id": fortune_id, "error": None}
+
+    v = determine_fortune_values(seed_source)
+    system = TODAY_SYSTEM_PROMPT.format(
+        overall_stars=stars(v["overall"]),
+        love_stars=stars(v["love"]),
+        money_stars=stars(v["money"]),
+        work_stars=stars(v["work"]),
+        health_stars=stars(v["health"]),
+        color=v["color"],
+        number=v["number"],
+        item=v["item"],
+    )
+    user_content = f"今日の日付：{today_label}\n"
+    if user_id:
+        user_content += f"ユーザーID：{user_id}\n"
+    if name:
+        user_content += f"名前：{name}\n"
+    if birth:
+        user_content += f"生年月日：{birth}\n"
+
+    result = None
+    last_candidate = ""
+    for _ in range(3):
+        last_candidate = call_openai(system, user_content)
+        if verify_fortune_output(last_candidate, v):
+            result = last_candidate
+            break
+
+    if result is None:
+        result = force_correct_values(last_candidate, v)
+
+    cache[cache_key] = result
+    save_cache(cache)
+    return {"result": result, "from_cache": False, "fortune_id": fortune_id, "error": None}
+
+# ──────────────────────────────────────────────
+# 相性占い生成（外部呼び出し可能・改善10）
+# ──────────────────────────────────────────────
+def generate_compatibility(
+    name1: str = "",
+    birth1: str = "",
+    name2: str = "",
+    birth2: str = "",
+    today_iso: str | None = None,
+    today_label: str | None = None,
+) -> dict:
+    """
+    相性占いを生成する。外部から呼び出し可能。
+
+    Returns dict:
+        result      : str
+        from_cache  : bool
+        fortune_id  : str
+        error       : str | None
+    """
+    if today_iso is None:
+        today_iso = date.today().strftime("%Y-%m-%d")
+    if today_label is None:
+        today_label = date.today().strftime("%Y年%m月%d日")
+
+    seed_source = (
+        f"compat|{today_iso}"
+        f"|{name1.strip()}|{birth1.strip()}"
+        f"|{name2.strip()}|{birth2.strip()}"
+    )
+    fortune_id = get_fortune_id(seed_source)
+    cache = load_cache()
+
+    if seed_source in cache:
+        return {"result": cache[seed_source], "from_cache": True,
+                "fortune_id": fortune_id, "error": None}
+
+    v = determine_fortune_values(seed_source)
+    compat_score = min(60 + (v["overall"] + v["love"]) * 4, 100)
+
+    system = COMPAT_SYSTEM_PROMPT.format(
+        compat_stars=stars(round(compat_score / 20)),
+        compat_score=compat_score,
+        item=v["item"],
+    )
+    user_content = f"今日の日付：{today_label}\n"
+    user_content += f"Aさんの名前：{name1 or '（未入力）'}\n"
+    if birth1:
+        user_content += f"Aさんの生年月日：{birth1}\n"
+    user_content += f"Bさんの名前：{name2 or '（未入力）'}\n"
+    if birth2:
+        user_content += f"Bさんの生年月日：{birth2}\n"
+
+    result = call_openai(system, user_content)
+    cache[seed_source] = result
+    save_cache(cache)
+    return {"result": result, "from_cache": False, "fortune_id": fortune_id, "error": None}
+
+# ──────────────────────────────────────────────
+# Streamlit UI
+# ──────────────────────────────────────────────
+def main():
+    today = date.today()
+    today_iso = today.strftime("%Y-%m-%d")
+    today_label = today.strftime("%Y年%m月%d日")
+
+    st.markdown('<h1 class="main-title">🔮 くまっち占い</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">くまっちがあなたの運命を読み解きます</p>', unsafe_allow_html=True)
+
+    mode = st.radio(
+        "占いの種類",
+        ["🌟 今日の運勢", "💑 相性占い"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+
+    # ── 今日の運勢 ──────────────────────────────
+    if mode == "🌟 今日の運勢":
+        with st.form("today_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("👤 名前（任意）", placeholder="例：くまっち")
+            with col2:
+                birth_raw = st.text_input(
+                    "🎂 生年月日（任意）",
+                    placeholder="例：19001010",
+                    max_chars=8,
+                    help="YYYYMMDD形式の8桁数字",
+                )
+            submitted = st.form_submit_button("🔮 今日の運勢を占う")
+
+        if submitted:
+            birth, birth_error = parse_birth(birth_raw)
+            if birth_error:
+                st.error(birth_error)
+            else:
+                data = generate_today_fortune(
+                    user_id="",
+                    name=name,
+                    birth=birth,
+                    today_iso=today_iso,
+                    today_label=today_label,
+                )
+                if data["error"]:
+                    st.warning(data["error"])
+                else:
+                    with st.spinner("くまっちが星の声を聞いています...✨"):
+                        pass
+                    st.markdown(
+                        f'<div class="fortune-card">{data["result"]}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    label = (
+                        f"📅 {today_label}の運勢（キャッシュ済み）"
+                        if data["from_cache"]
+                        else f"📅 {today_label}の運勢"
+                    )
+                    st.markdown(f'<div class="cache-badge">{label}</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="fortune-id-box">🔮 今日の運勢ID<br>'
+                        f'<span class="fortune-id-value">{data["fortune_id"]}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+    # ── 相性占い ─────────────────────────────────
+    else:
+        with st.form("compat_form"):
+            st.markdown("**👤 Aさん**")
+            col1, col2 = st.columns(2)
+            with col1:
+                name1 = st.text_input("名前（任意）", placeholder="例：くまっち", key="name1")
+            with col2:
+                birth1_raw = st.text_input(
+                    "生年月日（任意）",
+                    placeholder="例：19001010",
+                    max_chars=8,
+                    help="YYYYMMDD形式の8桁数字",
+                    key="birth1",
+                )
+
+            st.markdown("**👤 Bさん**")
+            col3, col4 = st.columns(2)
+            with col3:
+                name2 = st.text_input("名前（任意）", placeholder="例：ぱんだ", key="name2")
+            with col4:
+                birth2_raw = st.text_input(
+                    "生年月日（任意）",
+                    placeholder="例：19001010",
+                    max_chars=8,
+                    help="YYYYMMDD形式の8桁数字",
+                    key="birth2",
+                )
+            submitted2 = st.form_submit_button("🔮 相性を占う")
+
+        if submitted2:
+            birth1, err1 = parse_birth(birth1_raw)
+            birth2, err2 = parse_birth(birth2_raw)
+            if err1:
+                st.error(f"Aさんの{err1}")
+            elif err2:
+                st.error(f"Bさんの{err2}")
+            else:
+                with st.spinner("くまっちが2人の縁を読み解いています...✨"):
+                    try:
+                        data = generate_compatibility(
+                            name1=name1, birth1=birth1,
+                            name2=name2, birth2=birth2,
+                            today_iso=today_iso,
+                            today_label=today_label,
+                        )
+                        st.markdown(
+                            f'<div class="fortune-card">{data["result"]}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        label = (
+                            f"📅 {today_label}の相性（キャッシュ済み）"
+                            if data["from_cache"]
+                            else f"📅 {today_label}の相性"
+                        )
+                        st.markdown(f'<div class="cache-badge">{label}</div>', unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div class="fortune-id-box">🔮 今日の運勢ID<br>'
+                            f'<span class="fortune-id-value">{data["fortune_id"]}</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                    except Exception as e:
+                        st.error(f"占いに失敗しました: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
