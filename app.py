@@ -362,10 +362,38 @@ SONG_DATABASE = {
 }
 
 MOOD_REASON_TEMPLATES = {
-    "love": "{genre}らしい甘く優しい雰囲気が、今日の恋愛運をそっと後押ししてくれる一曲です。",
-    "work": "{genre}ならではの前向きなメッセージが、仕事運と挑戦する気持ちを高めてくれます。",
-    "money": "{genre}の高揚感が、金運や成功運を引き寄せるパワーを持つ一曲です。",
-    "overall": "{genre}の明るいエネルギーが、今日一日の総合運を盛り上げてくれる一曲です。",
+    "love": [
+        "{genre}らしい甘く優しい雰囲気が、大切な人との距離をそっと縮めてくれます。",
+        "{artist}が歌う{genre}の温かさが、今日の恋愛運に優しく寄り添ってくれる一曲です。",
+        "{year}年発表の{genre}ならではのときめきが、恋のチャンスを引き寄せてくれます。",
+        "{genre}に流れる素直な感情表現が、相手との会話を弾ませるきっかけになります。",
+        "聴くだけで気持ちが前向きになる{genre}の一曲。恋愛面での自信を後押ししてくれます。",
+        "{genre}特有の切なさと優しさが、恋愛運のムードをぐっと高めてくれる一曲です。",
+    ],
+    "work": [
+        "{genre}ならではの前向きなメッセージが、仕事への集中力とやる気を高めてくれます。",
+        "{artist}の{genre}に込められた挑戦の姿勢が、今日の仕事運を後押ししてくれます。",
+        "{year}年の{genre}が持つ勢いが、目の前の課題を乗り越える力をくれる一曲です。",
+        "{genre}特有のリズム感が、テキパキと物事を進めたい今日にぴったりです。",
+        "諦めない気持ちを後押ししてくれる{genre}の名曲。仕事運の追い風になります。",
+        "{genre}の熱いメッセージ性が、周囲との連携や評価アップにつながる一曲です。",
+    ],
+    "money": [
+        "{genre}の高揚感が、金運や成功運をぐっと引き寄せてくれるパワーを持っています。",
+        "{artist}の{genre}に漂う勝負運の強さが、今日の金運アップを後押しします。",
+        "{year}年発表の{genre}が持つ華やかさが、チャンスとお金の巡りを良くしてくれます。",
+        "{genre}特有の高まる気分が、思い切った決断や投資判断を後押ししてくれます。",
+        "聴くだけで気分が上がる{genre}の一曲。金運・成功運のスイッチを入れてくれます。",
+        "{genre}の明るく力強いエネルギーが、今日の金運の流れを引き寄せてくれます。",
+    ],
+    "overall": [
+        "{genre}の明るいエネルギーが、今日一日の総合運を底上げしてくれる一曲です。",
+        "{artist}が歌う{genre}の魅力が、心を軽やかにして運気全体を整えてくれます。",
+        "{year}年を代表する{genre}の名曲。聴くだけで一日の流れが良くなります。",
+        "{genre}特有の親しみやすいメロディが、周囲との運気の巡りを良くしてくれます。",
+        "多くの人に愛されてきた{genre}の一曲。安定した総合運を支えてくれます。",
+        "{genre}の懐かしくも新しい魅力が、今日一日を心地よく彩ってくれます。",
+    ],
 }
 
 MEDALS = ["🥇", "🥈", "🥉"]
@@ -579,8 +607,12 @@ def pick_songs(era_key: str, mood_key: str, count: int, exclude_titles: list[str
     return result
 
 def build_song_reason(song: dict, mood_key: str) -> str:
-    template = MOOD_REASON_TEMPLATES.get(mood_key, MOOD_REASON_TEMPLATES["overall"])
-    return template.format(genre=song["genre"])
+    templates = MOOD_REASON_TEMPLATES.get(mood_key, MOOD_REASON_TEMPLATES["overall"])
+    # 曲タイトルのハッシュ値でパターンを振り分け、同じ雰囲気の曲同士でも
+    # 説明文が被らないようにする（同じ曲なら毎回同じ説明文になり安定する）。
+    idx = int(hashlib.sha256(song["title"].encode("utf-8")).hexdigest(), 16) % len(templates)
+    template = templates[idx]
+    return template.format(genre=song["genre"], artist=song["artist"], year=song["year"])
 
 def render_song_list(songs: list[dict], mood_key: str) -> str:
     """曲リストをHTML文字列に変換する（song-cardで使用）。"""
@@ -839,18 +871,6 @@ def main():
                     songs = st.session_state["displayed_songs"]
                     song_html = render_song_list(songs, st.session_state["song_mood_key"])
                     st.markdown(f'<div class="song-card">{song_html}</div>', unsafe_allow_html=True)
-
-                    pool_size = len(SONG_DATABASE.get(st.session_state["song_era_key"], []))
-                    if len(songs) < pool_size:
-                        if st.button("🎵 もっと見る（+5曲）"):
-                            more = pick_songs(
-                                st.session_state["song_era_key"],
-                                st.session_state["song_mood_key"],
-                                5,
-                                [s["title"] for s in st.session_state["displayed_songs"]],
-                            )
-                            st.session_state["displayed_songs"] += more
-                            st.rerun()
 
     # ── 相性占い ─────────────────────────────────
     else:
