@@ -4,6 +4,7 @@ import os
 import json
 import hashlib
 import re
+import random
 from datetime import date, datetime
 from pathlib import Path
 
@@ -46,6 +47,32 @@ st.markdown("""
         box-shadow: 0 0 30px #6a3d9a44;
         margin-top: 1rem;
         white-space: pre-wrap;
+    }
+    .song-card {
+        background: linear-gradient(145deg, #1c0a3a, #2d1060);
+        border: 1px solid #e8c97e55;
+        border-radius: 14px;
+        padding: 1.2rem 1.6rem;
+        color: #e8dff5;
+        font-size: 1.0rem;
+        line-height: 1.7;
+        box-shadow: 0 0 20px #e8c97e33;
+        margin-top: 0.9rem;
+    }
+    .song-title {
+        color: #e8c97e;
+        font-size: 1.15rem;
+        font-weight: bold;
+    }
+    .song-meta {
+        color: #b08fd4;
+        font-size: 0.9rem;
+        margin-bottom: 0.3rem;
+    }
+    .song-reason {
+        color: #e8dff5;
+        font-size: 0.92rem;
+        margin-top: 0.3rem;
     }
     .stSelectbox label, .stTextInput label {
         color: #c9a9e8 !important;
@@ -122,9 +149,12 @@ LUCKY_ITEMS = [
     "キャンドル", "クリスタル", "お守り", "傘", "指輪", "ブレスレット",
 ]
 
+# 「開運カラオケ曲」はGPTではなく、下記の曲データベースから
+# プログラム側でランダム抽選する（③毎回違う曲が出る仕様のため）。
+# そのため、GPTへの指示からは曲選定の項目を除外している。
 TODAY_SYSTEM_PROMPT = """\
 あなたは占い師「くまっち」です。
-運勢の数値はすでに決定されています。あなたの役割は「各運勢の解説」「開運アドバイス」「開運カラオケ曲の選定」のみです。
+運勢の数値はすでに決定されています。あなたの役割は「各運勢の解説」「開運アドバイス」のみです。
 
 ユーザーから渡される運勢データをそのまま使い、必ず以下のフォーマットだけで返してください。余分な前置きは不要です。
 
@@ -156,10 +186,6 @@ TODAY_SYSTEM_PROMPT = """\
 
 🎁ラッキーアイテム
 {item}
-
-🎤開運カラオケ曲
-[曲名] / [アーティスト名]
-[その曲を選んだ理由を20〜40文字で。生年月日から世代を推定し知っていそうな日本の曲を選ぶ]
 
 ✨開運アドバイス
 [60〜100文字の具体的なアドバイス]
@@ -205,6 +231,145 @@ COMPAT_SYSTEM_PROMPT = """\
 """
 
 # ──────────────────────────────────────────────
+# 🎤 開運カラオケ曲データベース
+# ──────────────────────────────────────────────
+# 構造: ERA_KEY -> [ {title, artist, year, genre, tags}, ... ]
+# tags は「恋愛運UP(love)」「仕事運UP(work)」「金運UP(money)」に該当する曲だけ
+# 付与する。tagsが空でも「総合運UP(overall)」では常に候補になる。
+# 曲を追加したい場合は、該当する年代のリストに辞書を1つ追記するだけでよい。
+
+SONG_DATABASE = {
+    # 18〜24歳向け（2020〜2025年頃の曲を中心に）
+    "current": [
+        {"title": "アイドル", "artist": "YOASOBI", "year": 2023, "genre": "アニメ/J-POP", "tags": ["overall", "work"]},
+        {"title": "Bling-Bang-Bang-Born", "artist": "Creepy Nuts", "year": 2024, "genre": "アニメ/ヒップホップ", "tags": ["overall", "money"]},
+        {"title": "うっせぇわ", "artist": "Ado", "year": 2020, "genre": "J-POP", "tags": ["work"]},
+        {"title": "ダーリン", "artist": "Mrs. GREEN APPLE", "year": 2024, "genre": "J-POP/バンド", "tags": ["love"]},
+        {"title": "白日", "artist": "King Gnu", "year": 2019, "genre": "ロック", "tags": ["overall"]},
+        {"title": "Subtitle", "artist": "Official髭男dism", "year": 2022, "genre": "J-POP/バンド", "tags": ["love"]},
+        {"title": "NIGHT DANCER", "artist": "imase", "year": 2022, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "死ぬのがいいわ", "artist": "藤井風", "year": 2020, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "マリーゴールド", "artist": "あいみょん", "year": 2018, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "怪獣の花唄", "artist": "Vaundy", "year": 2020, "genre": "J-POP", "tags": ["work"]},
+        {"title": "ただ君に晴れ", "artist": "ヨルシカ", "year": 2019, "genre": "バンド/ボカロ系", "tags": ["overall"]},
+        {"title": "Grandeur", "artist": "Snow Man", "year": 2023, "genre": "男性アイドル", "tags": ["work", "money"]},
+        {"title": "シンデレラガール", "artist": "なにわ男子", "year": 2021, "genre": "男性アイドル", "tags": ["love"]},
+        {"title": "チャンスは平等", "artist": "乃木坂46", "year": 2020, "genre": "女性アイドル", "tags": ["work"]},
+        {"title": "Nobody's fault", "artist": "櫻坂46", "year": 2021, "genre": "女性アイドル", "tags": ["work", "money"]},
+        {"title": "Mela!", "artist": "緑黄色社会", "year": 2022, "genre": "バンド", "tags": ["overall"]},
+        {"title": "Super Shy", "artist": "NewJeans", "year": 2023, "genre": "K-POP", "tags": ["love"]},
+        {"title": "UNFORGIVEN", "artist": "LE SSERAFIM", "year": 2023, "genre": "K-POP", "tags": ["money", "work"]},
+        {"title": "紅蓮華", "artist": "LiSA", "year": 2019, "genre": "アニメ", "tags": ["work", "money"]},
+        {"title": "残響散歌", "artist": "Aimer", "year": 2021, "genre": "アニメ", "tags": ["overall"]},
+    ],
+    # 25〜34歳向け（2015〜2025年頃）
+    "era_2015_2025": [
+        {"title": "Lemon", "artist": "米津玄師", "year": 2018, "genre": "J-POPバラード", "tags": ["overall"]},
+        {"title": "前前前世", "artist": "RADWIMPS", "year": 2016, "genre": "アニメ/ロック", "tags": ["love", "work"]},
+        {"title": "恋", "artist": "星野源", "year": 2016, "genre": "J-POP", "tags": ["love"]},
+        {"title": "Pretender", "artist": "Official髭男dism", "year": 2019, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "U.S.A.", "artist": "DA PUMP", "year": 2018, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "パプリカ", "artist": "Foorin", "year": 2018, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "夜に駆ける", "artist": "YOASOBI", "year": 2019, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "感電", "artist": "米津玄師", "year": 2020, "genre": "J-POP", "tags": ["work", "money"]},
+        {"title": "恋するフォーチュンクッキー", "artist": "AKB48", "year": 2013, "genre": "女性アイドル", "tags": ["love", "overall"]},
+        {"title": "サイレントマジョリティー", "artist": "欅坂46", "year": 2016, "genre": "女性アイドル", "tags": ["work"]},
+        {"title": "君の名は希望", "artist": "乃木坂46", "year": 2016, "genre": "女性アイドル", "tags": ["work"]},
+        {"title": "R.Y.U.S.E.I.", "artist": "三代目 J Soul Brothers", "year": 2014, "genre": "J-POP/ダンス", "tags": ["money", "work"]},
+        {"title": "夜行", "artist": "さユり", "year": 2018, "genre": "アニメ/バラード", "tags": ["overall"]},
+        {"title": "Dynamite", "artist": "BTS", "year": 2020, "genre": "K-POP", "tags": ["overall", "money"]},
+        {"title": "マリーゴールド", "artist": "あいみょん", "year": 2018, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "白日", "artist": "King Gnu", "year": 2019, "genre": "ロック", "tags": ["overall"]},
+        {"title": "Mela!", "artist": "緑黄色社会", "year": 2022, "genre": "バンド", "tags": ["overall"]},
+        {"title": "ひまわりの約束", "artist": "秦基博", "year": 2013, "genre": "アニメバラード", "tags": ["love"]},
+    ],
+    # 35〜44歳向け（2005〜2015年頃）
+    "era_2005_2015": [
+        {"title": "桜", "artist": "コブクロ", "year": 2005, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "蕾", "artist": "コブクロ", "year": 2005, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "HANABI", "artist": "Mr.Children", "year": 2008, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "キセキ", "artist": "GReeeeN", "year": 2008, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "しるし", "artist": "Mr.Children", "year": 2007, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "ヘビーローテーション", "artist": "AKB48", "year": 2010, "genre": "女性アイドル", "tags": ["overall"]},
+        {"title": "Ti Amo", "artist": "EXILE", "year": 2009, "genre": "J-POP/ダンス", "tags": ["love"]},
+        {"title": "ありがとう", "artist": "いきものがかり", "year": 2010, "genre": "J-POPバラード", "tags": ["overall"]},
+        {"title": "恋音と雨空", "artist": "AAA", "year": 2010, "genre": "J-POP", "tags": ["love"]},
+        {"title": "Love so sweet", "artist": "嵐", "year": 2007, "genre": "男性アイドル", "tags": ["love"]},
+        {"title": "Real Face", "artist": "KAT-TUN", "year": 2005, "genre": "男性アイドル", "tags": ["work", "money"]},
+        {"title": "CHE.R.RY", "artist": "YUI", "year": 2006, "genre": "J-POP", "tags": ["love"]},
+        {"title": "I believe", "artist": "絢香", "year": 2006, "genre": "J-POPバラード", "tags": ["work"]},
+        {"title": "全力少年", "artist": "スキマスイッチ", "year": 2004, "genre": "J-POP", "tags": ["work"]},
+        {"title": "さくら", "artist": "ケツメイシ", "year": 2005, "genre": "J-POP/ヒップホップ", "tags": ["love"]},
+        {"title": "チョコレイト・ディスコ", "artist": "Perfume", "year": 2008, "genre": "テクノポップ", "tags": ["overall"]},
+        {"title": "ひまわりの約束", "artist": "秦基博", "year": 2013, "genre": "アニメバラード", "tags": ["love"]},
+        {"title": "R.Y.U.S.E.I.", "artist": "三代目 J Soul Brothers", "year": 2014, "genre": "J-POP/ダンス", "tags": ["money", "work"]},
+    ],
+    # 45〜54歳向け（1995〜2005年頃）
+    "era_1995_2005": [
+        {"title": "世界に一つだけの花", "artist": "SMAP", "year": 2003, "genre": "男性アイドル", "tags": ["work", "overall"]},
+        {"title": "First Love", "artist": "宇多田ヒカル", "year": 1999, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "HOWEVER", "artist": "GLAY", "year": 1997, "genre": "ロック/バラード", "tags": ["love"]},
+        {"title": "誘惑", "artist": "GLAY", "year": 1997, "genre": "ロック", "tags": ["love"]},
+        {"title": "LOVEマシーン", "artist": "モーニング娘。", "year": 1999, "genre": "女性アイドル", "tags": ["overall", "money"]},
+        {"title": "DEPARTURES", "artist": "globe", "year": 1996, "genre": "J-POP/ダンス", "tags": ["love"]},
+        {"title": "SEASONS", "artist": "浜崎あゆみ", "year": 2000, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "夏色", "artist": "ゆず", "year": 1998, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "ultra soul", "artist": "B'z", "year": 2001, "genre": "ロック", "tags": ["work", "money"]},
+        {"title": "Love, Day After Tomorrow", "artist": "倉木麻衣", "year": 2000, "genre": "J-POP", "tags": ["love"]},
+        {"title": "HONEY", "artist": "L'Arc〜en〜Ciel", "year": 1999, "genre": "ロック", "tags": ["love"]},
+        {"title": "本能", "artist": "椎名林檎", "year": 1999, "genre": "ロック", "tags": ["overall"]},
+        {"title": "CAN YOU CELEBRATE?", "artist": "安室奈美恵", "year": 1997, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "未来へ", "artist": "Kiroro", "year": 1998, "genre": "J-POPバラード", "tags": ["work"]},
+        {"title": "チェリー", "artist": "スピッツ", "year": 1996, "genre": "ロック", "tags": ["love"]},
+        {"title": "if...", "artist": "DA PUMP", "year": 1998, "genre": "J-POP/ダンス", "tags": ["overall"]},
+    ],
+    # 55〜64歳向け（1985〜1995年頃）
+    "era_1985_1995": [
+        {"title": "浪漫飛行", "artist": "米米CLUB", "year": 1990, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "パラダイス銀河", "artist": "光GENJI", "year": 1988, "genre": "男性アイドル", "tags": ["overall", "money"]},
+        {"title": "瑠璃色の地球", "artist": "松田聖子", "year": 1986, "genre": "女性アイドル", "tags": ["overall"]},
+        {"title": "Get Wild", "artist": "TM NETWORK", "year": 1987, "genre": "J-POP/ダンス", "tags": ["work", "money"]},
+        {"title": "LADY NAVIGATION", "artist": "B'z", "year": 1992, "genre": "ロック", "tags": ["love"]},
+        {"title": "世界が終るまでは...", "artist": "WANDS", "year": 1994, "genre": "ロック/バラード", "tags": ["love"]},
+        {"title": "負けないで", "artist": "ZARD", "year": 1993, "genre": "J-POPバラード", "tags": ["work"]},
+        {"title": "SAY YES", "artist": "CHAGE and ASKA", "year": 1991, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "それが大事", "artist": "大事MANブラザーズバンド", "year": 1991, "genre": "ロック", "tags": ["work"]},
+        {"title": "おどるポンポコリン", "artist": "B.B.クイーンズ", "year": 1990, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "ラブ・ストーリーは突然に", "artist": "小田和正", "year": 1991, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "世界中の誰よりきっと", "artist": "中山美穂＆WANDS", "year": 1992, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "シーズン・イン・ザ・サン", "artist": "TUBE", "year": 1986, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "慟哭", "artist": "工藤静香", "year": 1992, "genre": "女性アイドル/バラード", "tags": ["love"]},
+    ],
+    # 65歳以上向け（1970〜1985年頃）
+    "era_1970_1985": [
+        {"title": "UFO", "artist": "ピンク・レディー", "year": 1977, "genre": "女性アイドル", "tags": ["overall"]},
+        {"title": "春一番", "artist": "キャンディーズ", "year": 1978, "genre": "女性アイドル", "tags": ["overall"]},
+        {"title": "プレイバックPart2", "artist": "山口百恵", "year": 1978, "genre": "女性アイドル", "tags": ["work", "money"]},
+        {"title": "TOKIO", "artist": "沢田研二", "year": 1980, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "青い珊瑚礁", "artist": "松田聖子", "year": 1980, "genre": "女性アイドル", "tags": ["love"]},
+        {"title": "チャンピオン", "artist": "アリス", "year": 1978, "genre": "フォーク/ロック", "tags": ["work", "money"]},
+        {"title": "ひこうき雲", "artist": "荒井由実", "year": 1973, "genre": "J-POP", "tags": ["overall"]},
+        {"title": "いとしのエリー", "artist": "サザンオールスターズ", "year": 1979, "genre": "バンド/バラード", "tags": ["love"]},
+        {"title": "ふれあい", "artist": "中村雅俊", "year": 1974, "genre": "フォーク", "tags": ["overall"]},
+        {"title": "木綿のハンカチーフ", "artist": "太田裕美", "year": 1975, "genre": "J-POPバラード", "tags": ["love"]},
+        {"title": "シンデレラ・ハネムーン", "artist": "岩崎宏美", "year": 1978, "genre": "女性アイドル", "tags": ["love"]},
+        {"title": "ガンダーラ", "artist": "ゴダイゴ", "year": 1978, "genre": "J-POP", "tags": ["work", "money"]},
+        {"title": "どうにもとまらない", "artist": "山本リンダ", "year": 1972, "genre": "女性アイドル", "tags": ["overall"]},
+        {"title": "会いたくて会いたくて", "artist": "森昌子", "year": 1972, "genre": "女性アイドル/バラード", "tags": ["love"]},
+        {"title": "神田川", "artist": "かぐや姫", "year": 1973, "genre": "フォーク", "tags": ["love"]},
+    ],
+}
+
+MOOD_REASON_TEMPLATES = {
+    "love": "{genre}らしい甘く優しい雰囲気が、今日の恋愛運をそっと後押ししてくれる一曲です。",
+    "work": "{genre}ならではの前向きなメッセージが、仕事運と挑戦する気持ちを高めてくれます。",
+    "money": "{genre}の高揚感が、金運や成功運を引き寄せるパワーを持つ一曲です。",
+    "overall": "{genre}の明るいエネルギーが、今日一日の総合運を盛り上げてくれる一曲です。",
+}
+
+MEDALS = ["🥇", "🥈", "🥉"]
+
+# ──────────────────────────────────────────────
 # ユーティリティ
 # ──────────────────────────────────────────────
 def stars(n: int) -> str:
@@ -236,6 +401,16 @@ def parse_birth(raw: str) -> tuple[str, str]:
     except ValueError:
         return "", f"日付が正しくありません（入力値：{raw}）"
     return f"{yyyy}年{int(mm)}月{int(dd)}日", ""
+
+def add_section_spacing(text: str) -> str:
+    """①レイアウト改善：各運勢セクションの間に空行を入れて見やすくする。"""
+    if not text:
+        return text
+    section_markers = ["🌟", "💕", "💰", "💼", "🍀", "🎨", "🔢", "🎁", "✨"]
+    for marker in section_markers:
+        text = re.sub(rf"\n(?!\n){re.escape(marker)}", f"\n\n{marker}", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 # ──────────────────────────────────────────────
 # シード生成（優先順位付き）
@@ -333,6 +508,95 @@ def force_correct_values(text: str, v: dict) -> str:
     return text
 
 # ──────────────────────────────────────────────
+# 🎤 開運カラオケ曲：年齢・運勢に応じた選曲ロジック
+# ──────────────────────────────────────────────
+def calculate_age(birth_raw: str) -> int | None:
+    """YYYYMMDD形式の8桁文字列から満年齢を計算する。未入力ならNone。"""
+    birth_raw = (birth_raw or "").strip()
+    if not birth_raw.isdigit() or len(birth_raw) != 8:
+        return None
+    try:
+        yyyy, mm, dd = int(birth_raw[:4]), int(birth_raw[4:6]), int(birth_raw[6:])
+        birth_date = date(yyyy, mm, dd)
+    except ValueError:
+        return None
+    today = date.today()
+    age = today.year - birth_date.year
+    if (today.month, today.day) < (birth_date.month, birth_date.day):
+        age -= 1
+    return age
+
+def get_era_key(age: int | None) -> str:
+    """年齢から曲データベースの年代キーを返す。年齢不明の場合は中間層を既定値にする。"""
+    if age is None:
+        age = 30  # 生年月日未入力時の既定値（25〜34歳相当）
+    if age <= 24:
+        return "current"
+    if age <= 34:
+        return "era_2015_2025"
+    if age <= 44:
+        return "era_2005_2015"
+    if age <= 54:
+        return "era_1995_2005"
+    if age <= 64:
+        return "era_1985_1995"
+    return "era_1970_1985"
+
+def get_mood_key(v: dict) -> str:
+    """④運勢のうち最も高い項目に応じて曲の雰囲気（タグ）を決める。"""
+    candidates = {
+        "overall": v.get("overall", 0),
+        "love": v.get("love", 0),
+        "work": v.get("work", 0),
+        "money": v.get("money", 0),
+    }
+    # 同点の場合は overall > love > work > money の優先順位にする
+    priority = ["overall", "love", "work", "money"]
+    best = max(priority, key=lambda k: (candidates[k], -priority.index(k)))
+    return best
+
+def pick_songs(era_key: str, mood_key: str, count: int, exclude_titles: list[str]) -> list[dict]:
+    """指定の年代・雰囲気タグから、重複なくランダムに曲を選ぶ。"""
+    pool = SONG_DATABASE.get(era_key, [])
+    exclude_set = set(exclude_titles)
+
+    if mood_key == "overall":
+        matched = [s for s in pool if s["title"] not in exclude_set]
+    else:
+        matched = [s for s in pool if mood_key in s["tags"] and s["title"] not in exclude_set]
+
+    random.shuffle(matched)
+    result = matched[:count]
+
+    # マッチする曲だけでは数が足りない場合、同じ年代の他の曲で補う
+    if len(result) < count:
+        chosen_titles = exclude_set | {s["title"] for s in result}
+        remainder = [s for s in pool if s["title"] not in chosen_titles]
+        random.shuffle(remainder)
+        result += remainder[: count - len(result)]
+
+    return result
+
+def build_song_reason(song: dict, mood_key: str) -> str:
+    template = MOOD_REASON_TEMPLATES.get(mood_key, MOOD_REASON_TEMPLATES["overall"])
+    return template.format(genre=song["genre"])
+
+def render_song_list(songs: list[dict], mood_key: str) -> str:
+    """曲リストをHTML文字列に変換する（song-cardで使用）。"""
+    lines = []
+    for i, song in enumerate(songs):
+        medal = MEDALS[i] if i < len(MEDALS) else "⭐"
+        reason = build_song_reason(song, mood_key)
+        lines.append(
+            f'<div style="margin-bottom:1.1rem;">'
+            f'<span class="song-title">{medal} 「{song["title"]}」</span><br>'
+            f'<span class="song-meta">{song["artist"]}（{song["year"]}年）・{song["genre"]}</span><br>'
+            f'<span class="song-reason">【開運ポイント】{reason}</span>'
+            f'</div>'
+        )
+    return "".join(lines)
+
+# ──────────────────────────────────────────────
 # OpenAI呼び出し（モデルフォールバック付き）
 # ──────────────────────────────────────────────
 def call_openai(system_prompt: str, user_content: str) -> str:
@@ -376,6 +640,7 @@ def generate_today_fortune(
         result      : str        表示テキスト
         from_cache  : bool       キャッシュ利用か
         fortune_id  : str | None 運勢ID（8文字）
+        values      : dict | None 運勢の数値（カラオケ曲の選曲に使用）
         error       : str | None エラーメッセージ
     """
     if today_iso is None:
@@ -386,17 +651,17 @@ def generate_today_fortune(
     seed_source = make_seed_source(today_iso, user_id=user_id, name=name, birth=birth)
     if seed_source is None:
         return {"result": None, "from_cache": False, "fortune_id": None,
-                "error": "名前または生年月日を入力してください"}
+                "values": None, "error": "名前または生年月日を入力してください"}
 
     fortune_id = get_fortune_id(seed_source)
+    v = determine_fortune_values(seed_source)
     cache = load_cache()
     cache_key = f"today|{seed_source}"
 
     if cache_key in cache:
         return {"result": cache[cache_key], "from_cache": True,
-                "fortune_id": fortune_id, "error": None}
+                "fortune_id": fortune_id, "values": v, "error": None}
 
-    v = determine_fortune_values(seed_source)
     system = TODAY_SYSTEM_PROMPT.format(
         overall_stars=stars(v["overall"]),
         love_stars=stars(v["love"]),
@@ -428,7 +693,7 @@ def generate_today_fortune(
 
     cache[cache_key] = result
     save_cache(cache)
-    return {"result": result, "from_cache": False, "fortune_id": fortune_id, "error": None}
+    return {"result": result, "from_cache": False, "fortune_id": fortune_id, "values": v, "error": None}
 
 # ──────────────────────────────────────────────
 # 相性占い生成（外部呼び出し可能・改善10）
@@ -538,10 +803,10 @@ def main():
                 if data["error"]:
                     st.warning(data["error"])
                 else:
-                    with st.spinner("くまっちが星の声を聞いています...✨"):
-                        pass
+                    # ── 占い結果本体（①レイアウト改善：セクション間に空行）──
+                    display_text = add_section_spacing(data["result"])
                     st.markdown(
-                        f'<div class="fortune-card">{data["result"]}</div>',
+                        f'<div class="fortune-card">{display_text}</div>',
                         unsafe_allow_html=True,
                     )
                     label = (
@@ -555,6 +820,36 @@ def main():
                         f'<span class="fortune-id-value">{data["fortune_id"]}</span></div>',
                         unsafe_allow_html=True,
                     )
+
+                    # ── 🎤開運カラオケ曲：年齢・運勢に応じて毎回ランダム選曲 ──
+                    age = calculate_age(birth_raw)
+                    era_key = get_era_key(age)
+                    mood_key = get_mood_key(data["values"])
+
+                    # 新しい占い結果が出た（fortune_idが変わった）ときは選曲をリセット
+                    if st.session_state.get("song_fortune_id") != data["fortune_id"]:
+                        st.session_state["song_fortune_id"] = data["fortune_id"]
+                        st.session_state["song_era_key"] = era_key
+                        st.session_state["song_mood_key"] = mood_key
+                        st.session_state["displayed_songs"] = pick_songs(era_key, mood_key, 5, [])
+
+                    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+                    st.markdown("#### 🎤 今日のラッキーソング")
+                    songs = st.session_state["displayed_songs"]
+                    song_html = render_song_list(songs, st.session_state["song_mood_key"])
+                    st.markdown(f'<div class="song-card">{song_html}</div>', unsafe_allow_html=True)
+
+                    pool_size = len(SONG_DATABASE.get(st.session_state["song_era_key"], []))
+                    if len(songs) < pool_size:
+                        if st.button("🎵 もっと見る（+5曲）"):
+                            more = pick_songs(
+                                st.session_state["song_era_key"],
+                                st.session_state["song_mood_key"],
+                                5,
+                                [s["title"] for s in st.session_state["displayed_songs"]],
+                            )
+                            st.session_state["displayed_songs"] += more
+                            st.rerun()
 
     # ── 相性占い ─────────────────────────────────
     else:
@@ -602,8 +897,9 @@ def main():
                             today_iso=today_iso,
                             today_label=today_label,
                         )
+                        display_text = add_section_spacing(data["result"])
                         st.markdown(
-                            f'<div class="fortune-card">{data["result"]}</div>',
+                            f'<div class="fortune-card">{display_text}</div>',
                             unsafe_allow_html=True,
                         )
                         label = (
